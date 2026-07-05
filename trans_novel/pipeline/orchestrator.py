@@ -37,7 +37,7 @@ from .runstore import RunStore, slugify, STATUS_DONE
 ProgressFn = Callable[[int, int, str], None]
 
 
-# 语言名/代码 → ISO 639-1 两字母代码（AI 检测结果归一化）
+# 语言名/代码 → ISO 639-1 两字母代码（模型检测结果归一化）
 _LANG_ALIASES = {
     "japanese": "ja", "日语": "ja", "日文": "ja", "jp": "ja", "jpn": "ja",
     "english": "en", "英语": "en", "英文": "en", "eng": "en",
@@ -47,12 +47,14 @@ _LANG_ALIASES = {
     "french": "fr", "法语": "fr", "法文": "fr",
     "german": "de", "德语": "de", "德文": "de",
     "spanish": "es", "西班牙语": "es", "西班牙文": "es",
+    "italian": "it", "意大利语": "it", "意大利文": "it",
+    "portuguese": "pt", "葡萄牙语": "pt", "葡萄牙文": "pt",
 }
 
 
 def _normalize_lang(code: str) -> str:
     c = (code or "").strip().lower()
-    if not c:
+    if not c or c in {"auto", "unknown", "und", "uncertain", "mixed", "多语言", "未知"}:
         return ""
     if c in _LANG_ALIASES:
         return _LANG_ALIASES[c]
@@ -98,9 +100,16 @@ class Orchestrator:
             store.log_event("run_resumed", input_path=input_path, run_dir=store.run_dir)
             return store  # 已有进度 → 直接续跑，不重置（语言在 run() 里按 manifest 应用）
 
-        # 新建：auto 时用 AI 检测主要语言（失败回退启发式结果）
+        # 新建：auto 时只使用模型检测主要语言；失败则要求用户显式指定。
         if self.config.source_lang in ("auto", "", None):
-            doc.source_lang = self._detect_language_ai(doc) or doc.source_lang
+            detected = self._detect_language_ai(doc)
+            if not detected:
+                store.log_event("language_detection_failed", source_lang=doc.source_lang)
+                raise RuntimeError(
+                    "自动识别源语言失败：请检查模型配置，或在 config.yaml 的 "
+                    "language.source 指定 ISO 639-1 语言代码（如 ja/en/ko/ru/fr/de/es）。"
+                )
+            doc.source_lang = detected
             store.log_event("language_detected", source_lang=doc.source_lang)
         self._apply_language(doc.source_lang)
 
@@ -135,7 +144,7 @@ class Orchestrator:
         return store
 
     def _detect_language_ai(self, doc) -> str:
-        """用 LLM 检测正文主要语言，返回 ISO 代码（如 ja/en/ru）。失败返回空串。"""
+        """用模型检测正文主要语言，返回 ISO 代码（如 ja/en/ru）。失败返回空串。"""
         # labeled=False：纯源文样本，防多点采样的中文标签污染语言检测
         sample = self._sample_text(doc, labeled=False)[:1500]
         if not sample.strip():
@@ -143,6 +152,7 @@ class Orchestrator:
         system = (
             "你是语言识别器。判断给定文本的主要自然语言，"
             '仅输出 JSON：{"language":"<ISO 639-1 两字母代码，如 ja/en/ru/ko/fr/de/zh>"}。'
+            "无法判断时 language 置为空字符串。"
         )
         try:
             data = self.client.complete_json(

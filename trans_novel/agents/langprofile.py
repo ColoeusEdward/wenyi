@@ -1,4 +1,4 @@
-"""按源语言提供提示词的语言相关片段（日 / 英 → 中）。
+"""按源语言提供提示词的语言相关片段。
 
 各 agent 的提示词主体语言无关，差异通过这里的 `$src_label`、`$lang_guidance`、
 `$term_guidance` 占位注入。prompts.render() 会按 `src` 自动填入默认值，

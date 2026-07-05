@@ -12,13 +12,12 @@ from __future__ import annotations
 import os
 import re
 
-from .detect import detect_language
 from .epub_reader import read_epub
 from .fb2_reader import read_fb2
 from .models import KIND_TEXT, Chapter, Document, Segment
 from .text_reader import read_text
 
-# 句末标点（中/日/英），用于超长段的按句拆分
+# 常见句末标点，用于超长段的按句拆分
 _SENT_SPLIT = re.compile(r"(?<=[。．.!！？!?…\n])")
 
 
@@ -99,24 +98,9 @@ def load_document(path: str, source_lang: str, target_lang: str,
     else:
         raise ValueError(f"不支持的格式：{ext}（支持 .epub / .txt / .md / .fb2）")
 
-    if source_lang in ("auto", "", None):
-        doc.source_lang = detect_language(_sample_for_detect(doc))
     if split_segments and split_segments > 0:
         split_long_segments(doc.chapters, split_segments)
     return doc
-
-
-def _sample_for_detect(doc: Document, limit: int = 4000) -> str:
-    """拼接若干正文段供语言检测。"""
-    buf: list[str] = []
-    total = 0
-    for ch in doc.chapters:
-        for s in ch.text_segments:
-            buf.append(s.source)
-            total += len(s.source)
-            if total >= limit:
-                return "\n".join(buf)
-    return "\n".join(buf)
 
 
 def batch_segments(segments: list[Segment], max_chars: int) -> list[list[Segment]]:

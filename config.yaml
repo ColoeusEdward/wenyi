@@ -1,8 +1,8 @@
-# trans-novel 配置（日译中）
+# trans-novel 配置（多语言小说 → 中文）
 # 修改后无需改代码；模型 ID、档位、流水线开关都在这里。
 
 language:
-  source: auto # auto 自动检测来源语言；也可写死 ja / en / ko / de 等语言代码
+  source: auto # auto 由模型识别来源语言；也可写死 ja / en / ko / ru / de 等语言代码
   target: zh # 译文语言
 
 # ── LLM：DeepSeek 三档（经 OpenAI SDK 调 https://api.deepseek.com）─────────
@@ -29,7 +29,7 @@ llm:
 
 # ── 切分 ─────────────────────────────────────────────────────────────────
 segment:
-  # 一个翻译批次（句群）的目标大小，按字符估算 token（日文≈1字符1token）。
+  # 一个翻译批次（句群）的目标大小，按字符粗略估算 token。
   max_chars_per_batch: 1800
   # 单个段落超过该长度时按句末标点再切成多段（续段回填时并回同段），避免超长段。
   max_chars_per_segment: 1200
@@ -49,7 +49,7 @@ pipeline:
   prescan_concurrency: 4 # 预扫逐章梗概的并发线程数（各章独立，1=串行）
   glossary_scope: chapter # chapter=只注入本章出现的词条+锁定人物（长书省 token）；full=全量表
 
-# ── 敬称策略（日语源专用，英语源忽略）────────────────────────────────────
+# ── 敬称策略（日语源文本时生效，其它语言通常不会用到）────────────────────
 honorific:
   # keep_style: 体现语气（前辈/小X/X君…）; normalize: 按统一规则；drop: 省略
   strategy: keep_style

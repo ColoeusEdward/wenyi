@@ -1,4 +1,4 @@
-"""新功能测试（离线）：语言检测、标点规范化、术语 AI 审计统一、连续全流程。"""
+"""新功能测试（离线）：模型语言检测、标点规范化、术语 AI 审计统一、连续全流程。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ import unittest
 import zipfile
 
 from trans_novel.config import Config
-from trans_novel.ingest.detect import detect_language
 from trans_novel.postprocess.punct import normalize_zh
 from trans_novel.llm.base import FakeClient
 from trans_novel.pipeline.orchestrator import Orchestrator
@@ -18,15 +17,44 @@ from tests.sample_data import write_sample_txt
 from tests.fake_llm import routing_handler
 
 
-class TestDetect(unittest.TestCase):
-    def test_japanese(self):
-        self.assertEqual(detect_language("綾小路は教室にいた。「やあ」と言った。"), "ja")
+class TestModelLanguageDetection(unittest.TestCase):
+    def _cfg(self, state: str) -> Config:
+        return Config.from_dict({
+            "language": {"source": "auto", "target": "zh"},
+            "llm": {"provider": "fake", "tiers": {
+                "strong": {"model": "p"}, "cheap": {"model": "f"}}},
+            "pipeline": {"book_understanding": False},
+            "paths": {"state_dir": state},
+        })
 
-    def test_english(self):
-        self.assertEqual(detect_language("It took a moment for his words to sink in."), "en")
+    def test_auto_uses_model_detection(self):
+        with tempfile.TemporaryDirectory() as d:
+            txt = os.path.join(d, "novel.txt")
+            write_sample_txt(txt)
+            cfg = self._cfg(os.path.join(d, "state"))
 
-    def test_kana_wins_over_latin(self):
-        self.assertEqual(detect_language("ABC です"), "ja")
+            def handler(messages, tier, json_mode):
+                if "语言识别器" in messages[0]["content"]:
+                    return json.dumps({"language": "russian"}, ensure_ascii=False)
+                return routing_handler(messages, tier, json_mode)
+
+            store = Orchestrator(cfg, client=FakeClient(handler=handler)).prepare(txt)
+            self.assertEqual(cfg.source_lang, "ru")
+            self.assertEqual(store.load_manifest()["source_lang"], "ru")
+
+    def test_auto_detection_failure_requires_user_source(self):
+        with tempfile.TemporaryDirectory() as d:
+            txt = os.path.join(d, "novel.txt")
+            write_sample_txt(txt)
+            cfg = self._cfg(os.path.join(d, "state"))
+
+            def handler(messages, tier, json_mode):
+                if "语言识别器" in messages[0]["content"]:
+                    return json.dumps({"language": ""}, ensure_ascii=False)
+                return routing_handler(messages, tier, json_mode)
+
+            with self.assertRaisesRegex(RuntimeError, "language.source"):
+                Orchestrator(cfg, client=FakeClient(handler=handler)).prepare(txt)
 
 
 class TestPunct(unittest.TestCase):
@@ -117,7 +145,7 @@ class TestRunAll(unittest.TestCase):
             # 进度回调被触发，且最终 done==total
             self.assertTrue(seen)
             self.assertEqual(seen[-1][0], seen[-1][1])
-            # auto 检测把源语言定为 ja
+            # auto 通过模型检测把源语言定为 ja
             self.assertEqual(cfg.source_lang, "ja")
             # 报告含一致性字段；术语审计不在连续流程中自动运行
             self.assertIn("consistency_issues", result["report"])

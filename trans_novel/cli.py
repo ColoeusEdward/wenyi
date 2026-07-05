@@ -26,7 +26,7 @@ from .config import Config
 from .ingest.segmenter import load_document
 from .pipeline.runstore import STATUS_DONE, RunStore, slugify
 
-app = typer.Typer(add_completion=False, help="多 Agent 小说翻译系统（日/英 → 中）")
+app = typer.Typer(add_completion=False, help="多 Agent 小说翻译系统（多语言 → 中文）")
 tools_app = typer.Typer(
     add_completion=False,
     help="高级/调试工具：glossary（术语表）/ assemble（回填）/ qa / report",

@@ -463,6 +463,7 @@ class TestLangNormalize(unittest.TestCase):
         self.assertEqual(_normalize_lang("RU"), "ru")
         self.assertEqual(_normalize_lang("russian"), "ru")
         self.assertEqual(_normalize_lang("fr"), "fr")
+        self.assertEqual(_normalize_lang("unknown"), "")
         self.assertEqual(_normalize_lang(""), "")
 
 

@@ -49,7 +49,7 @@ class PipelineConfig(BaseModel):
 
 
 class Config(BaseModel):
-    source_lang: str = "auto"        # auto | ja | en | …（auto 时按正文脚本自动检测）
+    source_lang: str = "auto"        # auto | ja | en | …（auto 时由模型检测）
     target_lang: str = "zh"
     llm: LLMConfig = Field(default_factory=LLMConfig)
     segment: SegmentConfig = Field(default_factory=SegmentConfig)

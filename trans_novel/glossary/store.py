@@ -16,7 +16,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-# 术语类型（日译中）
+# 术语类型
 TYPE_PERSON = "人物"
 TYPE_PLACE = "地名"
 TYPE_ORG = "组织"

@@ -65,7 +65,7 @@ uv run trans-novel translate book.epub --no-qa
 
 主要配置都在 `config.yaml`：
 
-- `language.source`: `auto` 自动识别源语言，也可以写死语言代码，如 `ja`、`en`、`ko`、`de` 等。
+- `language.source`: `auto` 由模型识别源语言，也可以写死语言代码，如 `ja`、`en`、`ko`、`ru`、`de` 等。
 - `llm.tiers`: 配置 `strong`、`cheap`、`fast` 三档模型。
 - `pipeline.review`: 章末审校。
 - `pipeline.autofix_severe`: 对严重问题自动重译并采纳通过校验的结果。
@@ -86,7 +86,7 @@ uv run trans-novel translate book.epub --no-qa
 ```text
 读取输入
 → 解析章节、正文段落和 EPUB 目录
-→ 自动识别源语言
+→ 模型识别源语言（或使用配置指定语言）
 → 预扫整本书，生成全书概览和逐章梗概
 → 分析样章，建立初始术语表
 → 按章、按批翻译
@@ -135,7 +135,7 @@ uv run trans-novel tools assemble book.epub
 
 ```text
 trans_novel/
-  ingest/       输入解析、EPUB/FB2/TXT 切分、语言检测
+  ingest/       输入解析、EPUB/FB2/TXT 切分
   llm/          LLM 抽象接口、DeepSeek provider、FakeClient
   glossary/     SQLite 术语库、抽取、冲突处理
   agents/       分析、翻译、审校、润色、一致性、提示词

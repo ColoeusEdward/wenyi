@@ -1,7 +1,7 @@
 """审校 Agent（廉价档）+ 回译抽检。
 
 Reviewer：逐段比对原文/译文，报漏译、增译、误译、术语违例、人称错误。
-BackTranslator：把译文回译成日文，再与原文比对，抽样发现重大语义偏离。
+BackTranslator：把译文回译成源语言，再与原文比对，抽样发现重大语义偏离。
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ class Reviewer(Agent):
 
 
 class BackTranslator(Agent):
-    """回译抽检（廉价档）。两步：译文→日文，再与原文比对。"""
+    """回译抽检（廉价档）。两步：译文→源语言，再与原文比对。"""
 
     def backtranslate(self, targets: list[str]) -> list[str]:
         if not targets:

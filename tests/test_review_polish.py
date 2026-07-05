@@ -53,7 +53,7 @@ class TestBackTranslator(unittest.TestCase):
     def test_check(self):
         def handler(messages, tier, json_mode):
             system = messages[0]["content"]
-            if "回译成日文" in system:
+            if "回译译者" in system:
                 return json.dumps({"backtranslations": ["あ", "い"]}, ensure_ascii=False)
             if "保真度" in system:
                 return json.dumps({"issues": [{"index": 1, "detail": "含义改变"}]},
