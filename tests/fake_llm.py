@@ -39,7 +39,7 @@ def routing_handler(messages, tier, json_mode):
     if "译文审校" in system:
         return json.dumps({"issues": []}, ensure_ascii=False)
 
-    if "术语抽取器" in system:
+    if "术语" in system and "抽取器" in system:
         return json.dumps({"terms": [
             {"source": "堀北", "target": "堀北", "type": "人物", "gender": "女"}
         ]}, ensure_ascii=False)

@@ -22,8 +22,13 @@ TYPE_PLACE = "地名"
 TYPE_ORG = "组织"
 TYPE_TERM = "术语"
 TYPE_SKILL = "招式"
+TYPE_APPELLATION = "称谓"
 TYPE_HONORIFIC = "敬称"
+TYPE_SPEECH = "口癖"
+TYPE_FIXED_EXPR = "固定表达"
 TYPE_ONOMATOPOEIA = "拟声词"
+
+_SOURCE_ONLY_TYPES = {TYPE_APPELLATION, TYPE_HONORIFIC, TYPE_SPEECH, TYPE_FIXED_EXPR}
 
 CONFIDENCE_ORDER = {"low": 0, "medium": 1, "high": 2}
 
@@ -219,7 +224,13 @@ class GlossaryStore:
         """
         out: list[GlossaryTerm] = []
         for term in terms:
-            keys = [term.source] + term.aliases
+            # 称谓/口癖/固定表达是带语气或场景的派生写法，不能因为 alias
+            # 命中裸名就把派生译法注入到普通称呼处。
+            keys = (
+                [term.source]
+                if term.type in _SOURCE_ONLY_TYPES
+                else [term.source] + term.aliases
+            )
             if any(k and k in text for k in keys):
                 out.append(term)
         return out

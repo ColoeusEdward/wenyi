@@ -423,6 +423,79 @@ class TestGlossaryScope(unittest.TestCase):
                 self.assertIn("無関係用語", p)
                 self.assertIn("ホリキタ", p)
 
+    def test_batch_glossary_refreshes_following_prompts(self):
+        """批次翻译后实时抽取术语，后续批次 prompt 立即带上新称谓。"""
+        def handler(messages, tier, json_mode):
+            system = messages[0]["content"]
+            user = messages[-1]["content"]
+            if "文学翻译" in system:
+                n = len(re.findall(r"^\[(\d+)\]", user, re.M))
+                return json.dumps({"translations": ["小夏帆" for _ in range(n)]},
+                                  ensure_ascii=False)
+            if "术语" in system and "抽取器" in system and "夏帆ちゃん" in user and "小夏帆" in user:
+                return json.dumps({"terms": [
+                    {"source": "夏帆ちゃん", "target": "小夏帆",
+                     "type": "称谓", "aliases": ["夏帆"], "note": "亲昵称呼"}
+                ]}, ensure_ascii=False)
+            return routing_handler(messages, tier, json_mode)
+
+        with tempfile.TemporaryDirectory() as d:
+            txt = os.path.join(d, "novel.txt")
+            with open(txt, "w", encoding="utf-8") as f:
+                f.write(
+                    "# 第一章\n\n"
+                    "「夏帆ちゃん」と母親が言った。\n\n"
+                    "夏帆ちゃんは窓の外を見た。\n"
+                )
+            cfg = _config(os.path.join(d, "state"))
+            cfg.pipeline.polish = False
+            cfg.pipeline.review = False
+            cfg.pipeline.consistency_qa = False
+            cfg.pipeline.book_understanding = False
+            cfg.segment.max_chars_per_batch = 10
+
+            client = FakeClient(handler=handler)
+            Orchestrator(cfg, client=client).run(txt)
+
+            translate_prompts = [
+                "\n".join(m["content"] for m in c["messages"])
+                for c in client.calls
+                if "文学翻译" in c["messages"][0]["content"]
+            ]
+            self.assertGreaterEqual(len(translate_prompts), 3)
+            self.assertIn("夏帆ちゃん → 小夏帆", translate_prompts[-1])
+
+    def test_chapter_glossary_refreshes_review_prompt(self):
+        """全章兜底术语抽取在 review 前执行，章末审校能看到新称谓。"""
+        def handler(messages, tier, json_mode):
+            system = messages[0]["content"]
+            user = messages[-1]["content"]
+            if "文学翻译" in system:
+                n = len(re.findall(r"^\[(\d+)\]", user, re.M))
+                return json.dumps({"translations": ["小夏帆" for _ in range(n)]},
+                                  ensure_ascii=False)
+            if "术语" in system and "抽取器" in system and "夏帆ちゃん" in user:
+                return json.dumps({"terms": [
+                    {"source": "夏帆ちゃん", "target": "小夏帆",
+                     "type": "称谓", "aliases": ["夏帆"], "note": "亲昵称呼"}
+                ]}, ensure_ascii=False)
+            if "译文审校" in system:
+                self.assertIn("夏帆ちゃん → 小夏帆", user)
+                return json.dumps({"issues": []}, ensure_ascii=False)
+            return routing_handler(messages, tier, json_mode)
+
+        with tempfile.TemporaryDirectory() as d:
+            txt = os.path.join(d, "novel.txt")
+            with open(txt, "w", encoding="utf-8") as f:
+                f.write("# 第一章\n\n「夏帆ちゃん」と母親が言った。\n")
+            cfg = _config(os.path.join(d, "state"))
+            cfg.pipeline.polish = False
+            cfg.pipeline.consistency_qa = False
+            cfg.pipeline.book_understanding = False
+            cfg.segment.max_chars_per_batch = 200
+
+            Orchestrator(cfg, client=FakeClient(handler=handler)).run(txt)
+
 
 class TestTierRouting(unittest.TestCase):
     def test_task_tiers(self):
@@ -438,7 +511,7 @@ class TestTierRouting(unittest.TestCase):
 
             expect = {
                 "章节梗概员": "fast", "全书概览员": "fast",
-                "术语抽取器": "fast", "回译译者": "fast",
+                "术语与称呼抽取器": "fast", "回译译者": "fast",
                 "译文审校": "cheap", "保真度": "cheap",
                 "文学翻译": "strong",
             }

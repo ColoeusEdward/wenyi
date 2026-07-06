@@ -19,6 +19,45 @@ from tests.sample_data import write_sample_txt, write_sample_epub
 from tests.fake_llm import routing_handler
 
 
+def _write_vertical_epub(path: str) -> None:
+    container = """<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>
+"""
+    opf = """<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>縦書き小説</dc:title>
+    <dc:language>ja</dc:language>
+  </metadata>
+  <manifest>
+    <item id="style" href="style.css" media-type="text/css"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine page-progression-direction="rtl">
+    <itemref idref="ch1"/>
+  </spine>
+</package>
+"""
+    ch1 = """<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" class="vrtl"><head>
+<title>第一章</title><link rel="stylesheet" href="style.css"/>
+</head><body>
+<h1>第一章　出会い</h1>
+<p>綾小路は教室の窓際に座っていた。</p>
+</body></html>
+"""
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("mimetype", "application/epub+zip", zipfile.ZIP_STORED)
+        zf.writestr("META-INF/container.xml", container)
+        zf.writestr("OEBPS/content.opf", opf)
+        zf.writestr("OEBPS/style.css", "html { writing-mode: vertical-rl; }")
+        zf.writestr("OEBPS/ch1.xhtml", ch1)
+
+
 def _config(state_dir: str):
     return Config.from_dict({
         "language": {"source": "ja", "target": "zh"},
@@ -78,6 +117,21 @@ class TestAssembleEpub(unittest.TestCase):
             self.assertNotIn("data-tn-id", html)  # 占位标记已清除
             self.assertNotIn("綾小路は教室", html)  # 原文已被替换
 
+    def test_vertical_epub_is_exported_as_horizontal_chinese(self):
+        with tempfile.TemporaryDirectory() as d:
+            ep = os.path.join(d, "vertical.epub")
+            _write_vertical_epub(ep)
+            store, _ = _run(ep, os.path.join(d, "state"))
+            out = assemble(store, ep, out_format="epub")
+            with zipfile.ZipFile(out) as z:
+                opf = z.read("OEBPS/content.opf").decode("utf-8")
+                html = z.read("OEBPS/ch1.xhtml").decode("utf-8")
+            self.assertIn("<dc:language>zh-Hans</dc:language>", opf)
+            self.assertIn('page-progression-direction="ltr"', opf)
+            self.assertIn("writing-mode: horizontal-tb", html)
+            self.assertIn('lang="zh-Hans"', html)
+            self.assertNotIn('class="vrtl"', html)
+
 
 class TestTitleTranslation(unittest.TestCase):
     def test_manifest_keeps_book_title_and_translates_chapter_titles(self):
@@ -93,6 +147,7 @@ class TestTitleTranslation(unittest.TestCase):
             with zipfile.ZipFile(out) as z:
                 opf = z.read("OEBPS/content.opf").decode("utf-8")
             self.assertIn("サンプル小説", opf)       # OPF 书名保持原文
+            self.assertIn("<dc:language>zh-Hans</dc:language>", opf)
             self.assertEqual(os.path.basename(out), "novel.zh.epub")
 
     def test_rewrite_targets_propagates_to_titles(self):

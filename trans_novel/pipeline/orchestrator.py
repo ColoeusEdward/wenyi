@@ -1,10 +1,10 @@
 """编排器：驱动全流程，章级状态机 + 断点续跑。
 
-单章流水线（章内批次**串行**，逐批刷新滚动上下文；跨章亦串行传递梗概）：
+单章流水线（章内批次**串行**，逐批刷新滚动上下文与术语快照；跨章亦串行传递梗概）：
   每批：渲染上下文（含前一批刚译出的译文）→ 翻译（对齐保证）→ 润色（可选）→
-        标点规范化 → 立即把本批译文并入滚动上下文（供下一批参照，保证连贯）。
-  章末（串行）：整章分块审校（不阻塞翻译主路径）→ 严重项定向重译（autofix_severe，
-        过长度校验才采纳）→ 回译抽检 → 术语抽取入库 → 写 TM → 落盘标记 done。
+        标点规范化 → 术语/称呼/固定表达实时抽取入库 → 立即供下一批参照。
+  章末（串行）：全章术语兜底抽取 → 整章分块审校（不阻塞翻译主路径）→
+        严重项定向重译（autofix_severe，过长度校验才采纳）→ 回译抽检 → 写 TM → 落盘标记 done。
 翻译前先预扫源文建立全书理解（逐章梗概+全书概览，fast 档并行），作恒定前缀注入每章翻译。
 
 run_all：在翻译全书后接 术语 AI 审计统一 → 一致性 QA → 写报告 → 回填出 EPUB，一气呵成。
@@ -380,16 +380,9 @@ class Orchestrator:
 
         batches = batch_segments(text_segs, self.config.segment.max_chars_per_batch)
         label = f"第{ci}章 {chapter.title}"
-        # 章内术语快照：整章各批次共用同一份（章内恒定 → system+style+glossary 成为
-        # 整章批次共享的稳定前缀，命中 DeepSeek 自动前缀缓存，命中部分输入价≈0.1×）。
-        # glossary_scope=chapter 时裁剪为「本章源文实际出现的词条（含别名命中）+ 全部锁定人物」，
-        # 长书后期全量表很大，裁剪能显著省去未命中缓存时的输入 token；full 保持全量。
-        term_snapshot = glossary.all_terms()
-        if self.config.pipeline.glossary_scope == "chapter":
-            src_text = "\n".join(s.source for s in text_segs)
-            hit = {t.source for t in GlossaryStore.terms_in(term_snapshot, src_text)}
-            term_snapshot = [t for t in term_snapshot
-                             if t.source in hit or (t.type == TYPE_PERSON and t.locked)]
+        # 章内术语快照会在每个批次术语抽取后刷新，让新确认的称呼/口癖/固定表达
+        # 立即影响后续批次。glossary_scope=chapter 时仍按本章源文裁剪，避免全量表过大。
+        term_snapshot = self._chapter_term_snapshot(glossary, text_segs)
 
         # 逐批串行：每批渲染最新上下文 → 处理 → 立即把译文并入上下文供下一批参照。
         # 不再并发，换取章内跨批的代词/术语/语气连贯。
@@ -405,12 +398,15 @@ class Orchestrator:
             if len(existing_targets) == len(b):
                 # 该批上次已在原位、原上下文中译完 → 复用，重建滚动上下文后跳过
                 context.add_targets(existing_targets)
+                summary = self._extract_batch_glossary(glossary, store, ci, seg_base, b)
+                term_snapshot = self._chapter_term_snapshot(glossary, text_segs)
                 store.log_event(
                     "batch_skipped",
                     chapter=ci,
                     start_index=seg_base,
                     count=len(b),
                     reason="already_translated",
+                    glossary_extraction=summary,
                     segments=[
                         {"index": seg_base + i, "source": s.source, "target": s.target}
                         for i, s in enumerate(b)
@@ -423,29 +419,29 @@ class Orchestrator:
                 continue
 
             ctx_text = context.render(self.config.pipeline.rolling_context_segments)
-            # 传章内术语快照：批次间 glossary 块恒定，命中前缀缓存
             res = self._process_batch(b, term_snapshot, ctx_text, style,
                                       book_synopsis, chapter_digest)
             for s, t in zip(b, res.targets):
                 s.target = t
+            batch_start = seg_base
             store.log_event(
                 "batch_translated",
                 chapter=ci,
-                start_index=seg_base,
+                start_index=batch_start,
                 count=len(b),
                 polished=self.config.pipeline.polish,
                 punctuation_normalized=self.config.punctuation_normalize,
                 issues=res.issues,
                 backtranslate_sample_count=len(res.bt_samples),
                 segments=[
-                    {"index": seg_base + i, "source": s.source, "target": t}
+                    {"index": batch_start + i, "source": s.source, "target": t}
                     for i, (s, t) in enumerate(zip(b, res.targets))
                 ],
             )
             context.add_targets(res.targets)
             for it in res.issues:
                 it["chapter"] = ci
-                it["index"] += seg_base   # 批内下标 → 章内段号
+                it["index"] += batch_start   # 批内下标 → 章内段号
             review_issues.extend(res.issues)
             bt_samples.extend(res.bt_samples)
             done += len(b)
@@ -455,6 +451,17 @@ class Orchestrator:
             # 增量持久化：本批译文 + 累计问题落盘，下次中断从此批之后续跑
             chapter.meta["review_issues"] = review_issues
             store.save_chapter(chapter)
+            # 译文落盘后再抽取术语，避免中断时术语库领先章节产物。
+            self._extract_batch_glossary(glossary, store, ci, batch_start, b)
+            term_snapshot = self._chapter_term_snapshot(glossary, text_segs)
+
+        # 全章术语抽取入库：保留为兜底，捕捉跨段才能确认的称呼/口癖/固定表达。
+        # 放在 review 前，让本章审校也能使用兜底抽出的术语。
+        src_text = "\n".join(s.source for s in text_segs)
+        tgt_text = "\n".join(s.target or "" for s in text_segs)
+        self.extractor.extract_and_store(glossary, src_text, tgt_text, ci)
+        term_snapshot = self._chapter_term_snapshot(glossary, text_segs)
+        store.log_event("chapter_glossary_extracted", chapter=ci)
 
         # ── 章末整章审校（移出批内关键路径；块内 index 映射回章内段号）──
         # 幂等：续跑重入章末时清掉旧审校项，防重复累积。
@@ -493,12 +500,6 @@ class Orchestrator:
                 issues=bt_issues,
             )
 
-        # 术语抽取入库
-        src_text = "\n".join(s.source for s in text_segs)
-        tgt_text = "\n".join(s.target or "" for s in text_segs)
-        self.extractor.extract_and_store(glossary, src_text, tgt_text, ci)
-        store.log_event("chapter_glossary_extracted", chapter=ci)
-
         # 翻译记忆库（仅作记录/参考，不用于跨位置复用译文）
         for s in text_segs:
             if s.target:
@@ -517,6 +518,31 @@ class Orchestrator:
             backtranslation_issue_count=len(bt_issues),
         )
         return done
+
+    def _chapter_term_snapshot(self, glossary: GlossaryStore, text_segs) -> list:
+        """返回当前章节要注入的术语快照；实时入库后可重新调用刷新。"""
+        terms = glossary.all_terms()
+        if self.config.pipeline.glossary_scope != "chapter":
+            return terms
+        src_text = "\n".join(s.source for s in text_segs)
+        hit = {t.source for t in GlossaryStore.terms_in(terms, src_text)}
+        return [t for t in terms
+                if t.source in hit or (t.type == TYPE_PERSON and t.locked)]
+
+    def _extract_batch_glossary(self, glossary: GlossaryStore, store: RunStore,
+                                chapter: int, start_index: int, batch) -> dict[str, int]:
+        """每批译完/续跑跳过后即时抽取术语，供同章后续批次使用。"""
+        src_text = "\n".join(s.source for s in batch)
+        tgt_text = "\n".join(s.target or "" for s in batch)
+        summary = self.extractor.extract_and_store(glossary, src_text, tgt_text, chapter)
+        store.log_event(
+            "batch_glossary_extracted",
+            chapter=chapter,
+            start_index=start_index,
+            count=len(batch),
+            summary=summary,
+        )
+        return summary
 
     # ── 章末审校 + 严重项定向重译 ────────────────────────────────────────────
     _SEVERE_TYPES = ("missing", "mistranslation")

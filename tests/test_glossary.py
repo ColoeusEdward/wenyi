@@ -6,7 +6,12 @@ import os
 import tempfile
 import unittest
 
-from trans_novel.glossary.store import GlossaryStore, GlossaryTerm, TYPE_PERSON
+from trans_novel.glossary.store import (
+    GlossaryStore,
+    GlossaryTerm,
+    TYPE_APPELLATION,
+    TYPE_PERSON,
+)
 
 
 class TestGlossary(unittest.TestCase):
@@ -37,6 +42,20 @@ class TestGlossary(unittest.TestCase):
         hits = self.store.terms_in_text("「おはよう、綾小路くん」と堀北が言った。")
         self.assertEqual(len(hits), 1)
         self.assertEqual(hits[0].source, "綾小路")
+
+    def test_appellation_does_not_match_bare_name_alias(self):
+        self.store.upsert_term(
+            GlossaryTerm(
+                source="夏帆ちゃん",
+                target="小夏帆",
+                type=TYPE_APPELLATION,
+                aliases=["夏帆"],
+            )
+        )
+        self.assertEqual(self.store.terms_in_text("夏帆は窓の外を見た。"), [])
+        hits = self.store.terms_in_text("「夏帆ちゃん」と母親が言った。")
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0].source, "夏帆ちゃん")
 
     def test_conflict_keeps_locked(self):
         self.store.upsert_term(

@@ -18,6 +18,13 @@ from ..ingest.models import KIND_HEADING, Chapter
 from ..pipeline.runstore import RunStore
 
 _ILLEGAL_FN = re.compile(r'[\\/:*?"<>|\r\n\t]+')
+_HTML_EXTS = (".xhtml", ".html", ".htm")
+_VERTICAL_MARKERS = (
+    re.compile(rb"(?:-epub-|-webkit-)?writing-mode\s*:\s*(?:vertical-rl|vertical-lr|tb-rl)", re.I),
+    re.compile(rb"page-progression-direction\s*=\s*['\"]rtl['\"]", re.I),
+    re.compile(rb"\bclass\s*=\s*['\"][^'\"]*\bvrtl\b", re.I),
+)
+_HORIZONTAL_OVERRIDE_ID = "trans-novel-horizontal-override"
 
 
 def _sanitize_filename(name: str, fallback: str = "translated") -> str:
@@ -43,6 +50,14 @@ def _ch_title(c: dict) -> str:
 
 def _seg_text(seg) -> str:
     return seg.target if (seg.target and seg.target.strip()) else seg.source
+
+
+def _epub_lang(lang: str | None) -> str:
+    """EPUB 元数据语言码；中文目标默认标成简体中文。"""
+    normalized = (lang or "").strip().replace("_", "-").lower()
+    if normalized in {"", "zh", "zh-cn", "zh-hans", "cn"}:
+        return "zh-Hans"
+    return lang or "zh-Hans"
 
 
 def _merged_paragraphs(chapter: Chapter) -> list[tuple[str, str]]:
@@ -104,20 +119,95 @@ def _attr_str(value: object) -> str:
     return value if isinstance(value, str) else ""
 
 
-def _rewrite_opf_title(data: bytes, book_title: str) -> bytes:
-    """把 OPF 里的 dc:title 改为指定标题（仅首个主标题）。失败则原样返回。"""
-    if not book_title:
-        return data
+def _rewrite_opf_metadata(
+    data: bytes,
+    *,
+    book_title: str,
+    lang: str,
+    force_horizontal: bool,
+) -> bytes:
+    """更新 OPF 元数据：书名可选改写，译后语言改为目标语言，竖排源书改横排方向。"""
     try:
         soup = BeautifulSoup(data, "xml")
-        el = soup.find("dc:title") or soup.find("title")
-        if el is not None:
-            el.clear()
-            el.append(book_title)
-            return soup.encode()
+        if book_title:
+            title_el = soup.find("dc:title") or soup.find("title")
+            if title_el is not None:
+                title_el.clear()
+                title_el.append(book_title)
+
+        lang_el = soup.find("dc:language") or soup.find("language")
+        if lang_el is None:
+            metadata = soup.find("metadata")
+            if metadata is not None:
+                lang_el = soup.new_tag("dc:language")
+                metadata.append(lang_el)
+        if lang_el is not None:
+            lang_el.clear()
+            lang_el.append(lang)
+
+        if force_horizontal:
+            for spine in soup.find_all("spine"):
+                spine["page-progression-direction"] = "ltr"
+        return soup.encode()
     except Exception:
-        pass
+        return data
     return data
+
+
+def _epub_looks_vertical(zf: zipfile.ZipFile) -> bool:
+    """粗略检测 EPUB 是否声明了竖排排版。"""
+    for info in zf.infolist():
+        low = info.filename.lower()
+        if not low.endswith((".opf", ".css", ".xhtml", ".html", ".htm")):
+            continue
+        try:
+            data = zf.read(info.filename)
+        except Exception:
+            continue
+        if any(marker.search(data) for marker in _VERTICAL_MARKERS):
+            return True
+    return False
+
+
+def _rewrite_html_document(data: bytes | str, *, lang: str, force_horizontal: bool) -> bytes:
+    """给 XHTML/HTML 写入译后语言；必要时注入横排覆盖样式。"""
+    try:
+        text = data.decode("utf-8") if isinstance(data, bytes) else data
+        soup = BeautifulSoup(text, "html.parser")
+        html = soup.find("html")
+        if html is None:
+            return text.encode("utf-8")
+        html["lang"] = lang
+        html["xml:lang"] = lang
+        classes = html.get("class")
+        if isinstance(classes, list) and "vrtl" in classes:
+            html["class"] = [c for c in classes if c != "vrtl"]
+
+        if force_horizontal and soup.find(id=_HORIZONTAL_OVERRIDE_ID) is None:
+            head = soup.find("head")
+            if head is None:
+                head = soup.new_tag("head")
+                html.insert(0, head)
+            style = soup.new_tag("style", id=_HORIZONTAL_OVERRIDE_ID)
+            style.string = (
+                "html, body { "
+                "writing-mode: horizontal-tb !important; "
+                "-epub-writing-mode: horizontal-tb !important; "
+                "-webkit-writing-mode: horizontal-tb !important; "
+                "direction: ltr !important; "
+                "text-orientation: mixed !important; "
+                "} "
+                ".vrtl, .vertical, [class*=\"vrtl\"] { "
+                "writing-mode: horizontal-tb !important; "
+                "-epub-writing-mode: horizontal-tb !important; "
+                "-webkit-writing-mode: horizontal-tb !important; "
+                "direction: ltr !important; "
+                "}"
+            )
+            head.append(style)
+        return str(soup).encode("utf-8")
+    except Exception:
+        return data if isinstance(data, bytes) else data.encode("utf-8")
 
 
 def _rewrite_toc(data: bytes, title_by_base: dict[str, str], *, is_ncx: bool) -> bytes:
@@ -154,6 +244,7 @@ def _rewrite_toc(data: bytes, title_by_base: dict[str, str], *, is_ncx: bool) ->
 
 def _assemble_epub(store: RunStore, source_path: str, out_path: str) -> str:
     m = store.load_manifest()
+    target_lang = _epub_lang(m.get("target_lang", "zh"))
     # href -> 渲染后的 XHTML
     rendered: dict[str, str] = {}
     for c in m["chapters"]:
@@ -184,23 +275,49 @@ def _assemble_epub(store: RunStore, source_path: str, out_path: str) -> str:
     book_title = ""
 
     with zipfile.ZipFile(source_path, "r") as zin:
+        force_horizontal = _epub_looks_vertical(zin)
         infos = zin.infolist()
         with zipfile.ZipFile(out_path, "w") as zout:
             for info in infos:
                 name = info.filename
                 low = name.lower()
+                data = zin.read(name)
                 if name in rendered:
-                    zout.writestr(info, rendered[name].encode("utf-8"))
+                    zout.writestr(
+                        info,
+                        _rewrite_html_document(
+                            rendered[name],
+                            lang=target_lang,
+                            force_horizontal=force_horizontal,
+                        ),
+                    )
                 elif name == "mimetype":
-                    zout.writestr(info, zin.read(name), zipfile.ZIP_STORED)
+                    zout.writestr(info, data, zipfile.ZIP_STORED)
                 elif low.endswith(".opf"):
-                    zout.writestr(info, _rewrite_opf_title(zin.read(name), book_title))
+                    zout.writestr(
+                        info,
+                        _rewrite_opf_metadata(
+                            data,
+                            book_title=book_title,
+                            lang=target_lang,
+                            force_horizontal=force_horizontal,
+                        ),
+                    )
                 elif low.endswith(".ncx"):
-                    zout.writestr(info, _rewrite_toc(zin.read(name), title_by_base, is_ncx=True))
-                elif low.endswith((".xhtml", ".html", ".htm")) and _is_nav(zin.read(name)):
-                    zout.writestr(info, _rewrite_toc(zin.read(name), title_by_base, is_ncx=False))
+                    zout.writestr(info, _rewrite_toc(data, title_by_base, is_ncx=True))
+                elif low.endswith(_HTML_EXTS):
+                    if _is_nav(data):
+                        data = _rewrite_toc(data, title_by_base, is_ncx=False)
+                    zout.writestr(
+                        info,
+                        _rewrite_html_document(
+                            data,
+                            lang=target_lang,
+                            force_horizontal=force_horizontal,
+                        ),
+                    )
                 else:
-                    zout.writestr(info, zin.read(name))
+                    zout.writestr(info, data)
     return out_path
 
 
@@ -216,7 +333,7 @@ def _build_epub_from_chapters(store: RunStore, out_path: str) -> str:
 
     m = store.load_manifest()
     title = m.get("title", "translated")
-    lang = m.get("target_lang", "zh")
+    lang = _epub_lang(m.get("target_lang", "zh"))
 
     book = epub.EpubBook()
     book.set_identifier(f"trans-novel-{title}")
