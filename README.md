@@ -157,6 +157,10 @@ UV_CACHE_DIR=/tmp/uv-cache uv run python -m unittest discover -s tests
 uv run python -m unittest discover -s tests
 ```
 
+## 贡献
+
+欢迎提交 bug 修复、格式兼容、测试样例和文档改进。开发说明见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
 ## 憧憬与不足
 
 本项目为作者个人兴趣所开发，仅在于针对长文本书籍的译介做出一份微薄的努力，未来想让翻译在够准确的前提下更加顺畅，努力从可读向好读迈进。现阶段翻译文本一些口头禅前后翻译不一致，专有名词翻译不准确的问题，已经改进！如果还有什么问题，可以提交issue，如果你有什么想法，欢迎在讨论区提出，如果你有一定的编程能力，欢迎给我提交PR，让这个项目变得更好。👏
