@@ -552,6 +552,34 @@ class TestProgressLabels(unittest.TestCase):
         self.assertEqual(ConsistencyChecker._chapter_label("第一章", 1), "第一章")
         self.assertEqual(ConsistencyChecker._chapter_label("", 1), "章节 2")
 
+    def test_progress_covers_preparation_and_output_stages(self):
+        with tempfile.TemporaryDirectory() as d:
+            txt = os.path.join(d, "novel.txt")
+            write_sample_txt(txt)
+            cfg = _config(os.path.join(d, "state"))
+            labels: list[str] = []
+            orch = Orchestrator(cfg, client=FakeClient(handler=routing_handler))
+
+            orch.run_steps(
+                txt,
+                {"translate", "qa", "report", "assemble"},
+                progress=lambda done, total, label: labels.append(label),
+            )
+
+            expected = [
+                "解析文档…",
+                "分析全书风格…",
+                "预扫章节梗概",
+                "生成全书概览…",
+                "翻译章节标题…",
+                "翻译完成",
+                "一致性 QA…",
+                "生成报告…",
+                "回填译文…",
+            ]
+            positions = [labels.index(label) for label in expected]
+            self.assertEqual(positions, sorted(positions), labels)
+
 
 if __name__ == "__main__":
     unittest.main()

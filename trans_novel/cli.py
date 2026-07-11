@@ -112,7 +112,6 @@ def _translate_impl(
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
         MofNCompleteColumn(),
-        TextColumn("段"),
         TimeElapsedColumn(),
         console=console,
     ) as prog:
