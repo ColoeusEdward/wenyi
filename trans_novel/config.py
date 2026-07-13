@@ -124,7 +124,7 @@ class PipelineConfig(BaseModel):
     book_understanding: bool = True
     prescan_concurrency: int = 4     # 预扫逐章梗概的并发线程数（各章独立，1=串行）
     review_concurrency: int = 4      # 章末审校分块并发数（结果按原块序合并，1=串行）
-    glossary_scope: str = "chapter"  # chapter=只注入本章出现的词条+锁定人物（省 token）；full=全量表
+    glossary_scope: str = "chapter"  # chapter=只注入本章出现的词条（省 token）；full=全量表
 
 
 class OutputConfig(BaseModel):

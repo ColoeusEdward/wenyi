@@ -21,7 +21,7 @@ from typing import Any, Callable, Optional
 
 from ..config import Config
 from ..glossary.extractor import GlossaryExtractor
-from ..glossary.store import GlossaryStore, TYPE_PERSON
+from ..glossary.store import GlossaryStore
 from ..llm.base import LLMClient
 from ..llm.factory import build_client
 from ..llm.usage import merge_usage_summaries, usage_delta
@@ -574,8 +574,7 @@ class Orchestrator:
             return terms
         src_text = "\n".join(s.source for s in text_segs)
         hit = {t.source for t in GlossaryStore.terms_in(terms, src_text)}
-        return [t for t in terms
-                if t.source in hit or (t.type == TYPE_PERSON and t.locked)]
+        return [t for t in terms if t.source in hit]
 
     @staticmethod
     def _chapter_progress_label(title: str, index: int) -> str:

@@ -399,9 +399,9 @@ class TestGlossaryScope(unittest.TestCase):
         orch = Orchestrator(cfg, client=FakeClient(handler=routing_handler))
         store = orch.prepare(txt)
         g = GlossaryStore(store.glossary_path)
-        # ①锁定人物（source 不在正文）②无关术语（source/alias 均不在正文）③alias 在正文出现
+        # ①正文外人物 ②无关术语（source/alias 均不在正文）③alias 在正文出现
         g.upsert_term(GlossaryTerm(source="外部人物X", target="外部译名",
-                                   type="人物", locked=True))
+                                   type="人物"))
         g.upsert_term(GlossaryTerm(source="無関係用語", target="无关术语", type="术语"))
         g.upsert_term(GlossaryTerm(source="ホリキタ", target="堀北译名",
                                    aliases=["堀北"], type="术语"))
@@ -414,12 +414,12 @@ class TestGlossaryScope(unittest.TestCase):
                 if "文学翻译" in c["messages"][0]["content"]]
 
     def test_chapter_scope_prunes(self):
-        """chapter：锁定人物保留、无关术语剔除、alias 命中保留。"""
+        """chapter：正文外条目剔除，alias 命中的条目保留。"""
         with tempfile.TemporaryDirectory() as d:
             translate_prompts = self._run_with_terms(d, "chapter")
             self.assertTrue(translate_prompts)
             for p in translate_prompts:
-                self.assertIn("外部人物X", p)     # 锁定人物：始终保留
+                self.assertNotIn("外部人物X", p)  # 本章未出现：剔除
                 self.assertNotIn("無関係用語", p)  # 本章未出现：剔除
                 self.assertIn("ホリキタ", p)      # 别名「堀北」在正文：保留
 
