@@ -260,9 +260,13 @@ class TestProviderFactory(unittest.TestCase):
 
     def test_local_provider_defaults(self):
         from trans_novel.llm.factory import build_client
+        from trans_novel.llm.providers.ollama import OllamaClient
+        from trans_novel.llm.providers.vllm import VLLMClient
 
         ollama = build_client(self._config("ollama"))
         vllm = build_client(self._config("vllm"))
+        assert isinstance(ollama, OllamaClient)
+        assert isinstance(vllm, VLLMClient)
 
         self.assertEqual(ollama.base_url, "http://localhost:11434/v1")
         self.assertEqual(vllm.base_url, "http://localhost:8000/v1")
