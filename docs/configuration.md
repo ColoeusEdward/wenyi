@@ -171,7 +171,7 @@ pipeline:
 - `book_understanding`：预扫全书，生成章节梗概和全书概览。
 - `prescan_concurrency`：预扫章节梗概的并发数。
 - `review_concurrency`：章末审校分块的并发数；设为 `1` 时串行审校。
-- `glossary_scope`：`chapter` 仅带本章相关术语和锁定人物，`full` 带全量术语表。
+- `glossary_scope`：`chapter` 仅带本章相关术语，`full` 带全量术语表。
 
 命令行的 `--polish`、`--no-polish`、`--qa`、`--no-qa` 会覆盖对应配置。
 
