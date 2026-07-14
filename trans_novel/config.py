@@ -19,7 +19,7 @@ language:
 
 # ── LLM ──────────────────────────────────────────────────────────────────
 llm:
-  # deepseek | openai | openrouter | openai-compatible | ollama | vllm | fake
+  # deepseek | openai | anthropic | openrouter | openai-compatible | ollama | vllm | fake
   provider: deepseek
   base_url: https://api.deepseek.com
   api_key_env: DEEPSEEK_API_KEY

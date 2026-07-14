@@ -325,6 +325,139 @@ class TestProviderRequestKwargs(unittest.TestCase):
         self.assertEqual(kwargs["max_tokens"], 4096)
 
 
+class TestAnthropicProvider(unittest.TestCase):
+    messages = [
+        {"role": "system", "content": "你是翻译。"},
+        {"role": "user", "content": "x"},
+    ]
+
+    def test_splits_system_and_defaults_to_adaptive_thinking(self):
+        from trans_novel.llm.providers._openai_compatible import ResolvedTier
+        from trans_novel.llm.providers.anthropic import (
+            AnthropicTierOptions,
+            build_request_kwargs,
+        )
+
+        tier = ResolvedTier(model="claude-opus-4-8", options=AnthropicTierOptions())
+        kwargs = build_request_kwargs(tier, self.messages)
+
+        self.assertEqual(kwargs["system"], "你是翻译。")
+        self.assertEqual(kwargs["messages"], [{"role": "user", "content": "x"}])
+        self.assertEqual(kwargs["thinking"], {"type": "adaptive"})
+        self.assertEqual(kwargs["output_config"], {"effort": "high"})
+        self.assertEqual(kwargs["max_tokens"], 16000)
+
+    def test_thinking_disabled_skips_effort_and_uses_default_max_tokens(self):
+        from trans_novel.llm.providers._openai_compatible import ResolvedTier
+        from trans_novel.llm.providers.anthropic import (
+            AnthropicTierOptions,
+            build_request_kwargs,
+        )
+
+        tier = ResolvedTier(
+            model="claude-haiku-4-5",
+            options=AnthropicTierOptions(thinking=False),
+        )
+        kwargs = build_request_kwargs(tier, self.messages)
+
+        self.assertNotIn("thinking", kwargs)
+        self.assertNotIn("output_config", kwargs)
+        self.assertEqual(kwargs["max_tokens"], 8192)
+
+    def test_explicit_max_tokens_respected_and_floored_when_thinking(self):
+        from trans_novel.llm.providers._openai_compatible import ResolvedTier
+        from trans_novel.llm.providers.anthropic import (
+            AnthropicTierOptions,
+            build_request_kwargs,
+        )
+
+        thinking_tier = ResolvedTier(
+            model="claude-opus-4-8", options=AnthropicTierOptions()
+        )
+        self.assertEqual(
+            build_request_kwargs(thinking_tier, self.messages, max_tokens=100)[
+                "max_tokens"
+            ],
+            16000,
+        )
+        no_thinking_tier = ResolvedTier(
+            model="claude-haiku-4-5",
+            options=AnthropicTierOptions(thinking=False),
+        )
+        self.assertEqual(
+            build_request_kwargs(no_thinking_tier, self.messages, max_tokens=100)[
+                "max_tokens"
+            ],
+            100,
+        )
+
+    def test_json_mode_appends_instruction_without_mutating_input(self):
+        from trans_novel.llm.providers._openai_compatible import ResolvedTier
+        from trans_novel.llm.providers.anthropic import (
+            AnthropicTierOptions,
+            build_request_kwargs,
+        )
+
+        tier = ResolvedTier(model="m", options=AnthropicTierOptions(thinking=False))
+        kwargs = build_request_kwargs(tier, self.messages, json_mode=True)
+
+        self.assertIn("json", kwargs["system"])
+        self.assertEqual(self.messages[0]["content"], "你是翻译。")
+
+    def test_json_mode_without_system_message_still_injects_instruction(self):
+        from trans_novel.llm.providers._openai_compatible import ResolvedTier
+        from trans_novel.llm.providers.anthropic import (
+            AnthropicTierOptions,
+            build_request_kwargs,
+        )
+
+        tier = ResolvedTier(model="m", options=AnthropicTierOptions(thinking=False))
+        kwargs = build_request_kwargs(
+            tier, [{"role": "user", "content": "x"}], json_mode=True
+        )
+
+        self.assertIn("json", kwargs["system"])
+
+    def test_extra_body_merges_over_generated_kwargs(self):
+        from trans_novel.llm.providers._openai_compatible import ResolvedTier
+        from trans_novel.llm.providers.anthropic import (
+            AnthropicTierOptions,
+            build_request_kwargs,
+        )
+
+        tier = ResolvedTier(
+            model="m",
+            options=AnthropicTierOptions(
+                thinking=False, extra_body={"max_tokens": 555}
+            ),
+        )
+        kwargs = build_request_kwargs(tier, self.messages)
+
+        self.assertEqual(kwargs["max_tokens"], 555)
+
+    def test_usage_normalization_treats_cache_write_as_miss(self):
+        from trans_novel.llm.providers.anthropic import normalize_anthropic_usage
+
+        usage = {
+            "input_tokens": 10,
+            "cache_creation_input_tokens": 5,
+            "cache_read_input_tokens": 20,
+            "output_tokens": 7,
+        }
+        sample = normalize_anthropic_usage(usage)
+
+        self.assertEqual(sample.cache_miss_tokens, 15)
+        self.assertEqual(sample.cache_hit_tokens, 20)
+        self.assertEqual(sample.prompt_tokens, 35)
+        self.assertEqual(sample.completion_tokens, 7)
+        self.assertEqual(sample.total_tokens, 42)
+
+    def test_usage_normalization_handles_missing_usage(self):
+        from trans_novel.llm.providers.anthropic import normalize_anthropic_usage
+
+        self.assertIsNone(normalize_anthropic_usage(None))
+
+
 class TestProviderFactory(unittest.TestCase):
     def _config(
         self,
@@ -347,6 +480,7 @@ class TestProviderFactory(unittest.TestCase):
 
     def test_builds_each_provider_from_its_own_module(self):
         from trans_novel.llm.factory import build_client
+        from trans_novel.llm.providers.anthropic import AnthropicClient
         from trans_novel.llm.providers.ollama import OllamaClient
         from trans_novel.llm.providers.openai import OpenAIClient
         from trans_novel.llm.providers.openai_compatible import (
@@ -357,6 +491,7 @@ class TestProviderFactory(unittest.TestCase):
 
         cases = (
             ("openai", OpenAIClient, None),
+            ("anthropic", AnthropicClient, None),
             ("openrouter", OpenRouterClient, None),
             ("openai-compatible", OpenAICompatibleClient, "https://example.test/v1"),
             ("ollama", OllamaClient, None),
@@ -368,6 +503,7 @@ class TestProviderFactory(unittest.TestCase):
                     build_client(self._config(provider, base_url=base_url)),
                     expected_type,
                 )
+
 
     def test_local_provider_defaults(self):
         from trans_novel.llm.factory import build_client

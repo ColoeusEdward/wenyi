@@ -87,6 +87,36 @@ llm:
 `openai` 默认读取 `OPENAI_API_KEY`，`openrouter` 默认读取
 `OPENROUTER_API_KEY`。两者均可使用 `base_url`、`api_key_env` 覆盖默认值。
 
+### Anthropic（Claude 原生接口）
+
+`anthropic` provider 直接调用 Anthropic 官方 Messages API（而非 OpenAI 兼容
+接口），可完整使用 adaptive thinking 与 `effort` 档位调节：
+
+```yaml
+llm:
+  provider: anthropic
+  api_key_env: ANTHROPIC_API_KEY # 默认值，可省略
+  tiers:
+    strong:
+      model: claude-opus-4-8
+      options:
+        thinking: true
+        reasoning_effort: high # low | medium | high | xhigh | max（xhigh/max 仅 Opus 档支持）
+    cheap:
+      model: claude-haiku-4-5
+      options:
+        thinking: false # Haiku 4.5 不支持 effort，关闭思考即可
+    fast:
+      model: claude-haiku-4-5
+      options:
+        thinking: false
+```
+
+默认读取 `ANTHROPIC_API_KEY`；`base_url` 一般无需配置（留空即用官方地址，
+Claude Platform on AWS 等兼容部署可覆盖）。`thinking: true` 时启用
+`thinking: {type: "adaptive"}` 并附带 `effort`；关闭思考的档位不发送
+`effort`（Haiku 4.5 等非 Opus 模型不支持该参数）。
+
 ### 其他 OpenAI 兼容端点
 
 任意兼容 Chat Completions 的端点可使用 `openai-compatible`：
