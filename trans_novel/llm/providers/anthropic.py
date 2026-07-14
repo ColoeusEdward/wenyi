@@ -8,7 +8,9 @@ Anthropic 原生格式，因此不复用 OpenAICompatibleBaseClient，只借用�
 
 from __future__ import annotations
 
-import os
+import json
+import shutil
+import subprocess
 import threading
 from typing import Any, Optional
 
@@ -25,8 +27,6 @@ from ..base import LLMClient, Messages
 from ..tiers import resolve_tier
 from ..usage import UsageSample, read_usage_int
 from ._openai_compatible import ResolvedTier, resolve_provider_tiers
-
-DEFAULT_API_KEY_ENV = "ANTHROPIC_API_KEY"
 
 _JSON_MODE_INSTRUCTION = "Output must be valid json."
 
@@ -142,42 +142,53 @@ def build_cli_invocation(
 
 
 class AnthropicClient(LLMClient):
+    """通过本机已登录的 `claude` CLI（Claude Code）调用 Claude 模型。
+
+    不使用 anthropic SDK：每次 complete() 调用都 spawn 一个独立的
+    `claude -p ... --output-format json` 子进程，解析其 JSON 输出得到回复
+    文本和 usage 统计。鉴权完全依赖本机 `claude` 的登录态（OAuth/订阅），
+    不需要配置 API key / base_url。
+    """
+
     def __init__(self, cfg: LLMConfig):
         super().__init__()
         self.cfg = cfg
-        self.base_url = cfg.base_url  # None → SDK 默认 https://api.anthropic.com
-        self.api_key_env = cfg.api_key_env or DEFAULT_API_KEY_ENV
+        if cfg.base_url:
+            print(
+                "提示：anthropic provider 已改用本机 claude CLI，"
+                "llm.base_url 不再生效，已忽略。"
+            )
+        if cfg.api_key_env:
+            print(
+                "提示：anthropic provider 已改用本机 claude CLI，"
+                "llm.api_key_env 不再生效，已忽略。"
+            )
         self.tiers = resolve_provider_tiers(
             cfg.tiers,
             options_type=AnthropicTierOptions,
             defaults=_default_tiers(),
         )
-        self._client: Any = None
-        self._client_lock = threading.Lock()
+        for name, tier in self.tiers.items():
+            if tier.options.extra_body:
+                print(
+                    f"提示：anthropic provider 已改用本机 claude CLI，"
+                    f"llm.tiers.{name}.options.extra_body 不再生效，已忽略。"
+                )
+        self._cli_path: str | None = None
+        self._cli_path_lock = threading.Lock()
 
-    def _ensure_client(self) -> Any:
-        with self._client_lock:
-            if self._client is None:
-                try:
-                    import anthropic
-                except ImportError as error:  # pragma: no cover
+    def _ensure_cli_path(self) -> str:
+        with self._cli_path_lock:
+            if self._cli_path is None:
+                path = self.cfg.cli_path or shutil.which("claude")
+                if not path:
                     raise RuntimeError(
-                        "需要 anthropic SDK：pip install anthropic"
-                        "（或把 llm.provider 设为 fake 做离线测试）"
-                    ) from error
-                api_key = os.environ.get(self.api_key_env)
-                if not api_key:
-                    raise RuntimeError(
-                        f"未设置环境变量 {self.api_key_env}（Anthropic API key）"
+                        "找不到 claude CLI 可执行文件。请确认已安装并登录 "
+                        "Claude Code（claude --version 可正常运行），或在 "
+                        "config.yaml 的 llm.cli_path 显式指定可执行文件路径。"
                     )
-                client_kwargs: dict[str, Any] = {
-                    "api_key": api_key,
-                    "timeout": self.cfg.timeout,
-                }
-                if self.base_url:
-                    client_kwargs["base_url"] = self.base_url
-                self._client = anthropic.Anthropic(**client_kwargs)
-        return self._client
+                self._cli_path = path
+        return self._cli_path
 
     def complete(
         self,
@@ -189,13 +200,25 @@ class AnthropicClient(LLMClient):
         stage: Optional[str] = None,
     ) -> str:
         tier_config = resolve_tier(self.tiers, tier)
-        kwargs = build_request_kwargs(
-            tier_config,
-            messages,
-            json_mode=json_mode,
-            max_tokens=max_tokens,
+        extra_argv, system_prompt, stdin_text = build_cli_invocation(
+            tier_config, messages, json_mode=json_mode
         )
-        client = self._ensure_client()
+        cli_path = self._ensure_cli_path()
+        argv = (
+            [cli_path]
+            + [
+                "--safe-mode",
+                "--no-session-persistence",
+                "--output-format",
+                "json",
+                "--tools",
+                "none",
+            ]
+            + extra_argv
+        )
+        if system_prompt:
+            argv += ["--system-prompt", system_prompt]
+        argv += ["-p"]
 
         @retry(
             stop=stop_after_attempt(self.cfg.max_retries + 1),
@@ -204,16 +227,28 @@ class AnthropicClient(LLMClient):
             reraise=True,
         )
         def _call() -> str:
-            response = client.messages.create(**kwargs)
-            sample = normalize_anthropic_usage(getattr(response, "usage", None))
-            self.usage.record(tier, sample, stage)
-            return next(
-                (
-                    block.text
-                    for block in response.content
-                    if getattr(block, "type", None) == "text"
-                ),
-                "",
+            proc = subprocess.run(
+                argv,
+                input=stdin_text,
+                capture_output=True,
+                text=True,
+                timeout=self.cfg.timeout,
+                encoding="utf-8",
             )
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    f"claude CLI 退出码非 0（{proc.returncode}）：{proc.stderr[:500]}"
+                )
+            try:
+                data = json.loads(proc.stdout)
+            except ValueError as error:
+                raise RuntimeError(
+                    f"claude CLI 输出不是合法 JSON：{proc.stdout[:500]!r}"
+                ) from error
+            if data.get("is_error"):
+                raise RuntimeError(f"claude CLI 返回错误：{data!r}")
+            sample = normalize_anthropic_usage(data.get("usage"))
+            self.usage.record(tier, sample, stage)
+            return data.get("result", "")
 
         return _call()
