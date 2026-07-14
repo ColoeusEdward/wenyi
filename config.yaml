@@ -13,6 +13,9 @@ llm:
   # 不再需要 base_url / api_key_env，下面两行留作历史记录，已不生效：
   # base_url: https://api-cc.freemodel.dev
   # api_key_env: MY_KEY
+  # 本机 PATH 上 pnpm 全局装的 claude shim 已损坏（NODE_PATH 指向不存在的目录），
+  # shutil.which("claude") 会先命中它导致调用失败，这里显式指定可用的那个：
+  cli_path: C:\Program Files\nodejs\claude.cmd
   timeout: 600
   max_retries: 4
   tiers:
