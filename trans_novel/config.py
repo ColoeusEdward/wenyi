@@ -104,6 +104,7 @@ class LLMConfig(BaseModel):
     timeout: int = 600
     max_retries: int = 4
     tiers: dict[str, TierConfig] = Field(default_factory=dict)
+    cli_path: str | None = None  # anthropic provider: 显式指定 claude CLI 可执行文件路径
 
 
 class SegmentConfig(BaseModel):
@@ -182,6 +183,7 @@ class Config(BaseModel):
             timeout=llm_raw.get("timeout", 600),
             max_retries=llm_raw.get("max_retries", 4),
             tiers=tiers,
+            cli_path=llm_raw.get("cli_path"),
         )
         segment = SegmentConfig.model_validate(raw.get("segment", {}) or {})
         pipeline = PipelineConfig.model_validate(raw.get("pipeline", {}) or {})

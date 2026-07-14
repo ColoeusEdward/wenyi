@@ -82,6 +82,15 @@ class TestConfigFileCreation(unittest.TestCase):
 
         self.assertEqual(cfg.llm.reasoning_style, "deepseek")
 
+    def test_llm_cli_path_defaults_to_none_and_can_be_set(self):
+        default_cfg = Config.from_dict({"llm": {"provider": "anthropic"}})
+        self.assertIsNone(default_cfg.llm.cli_path)
+
+        custom_cfg = Config.from_dict(
+            {"llm": {"provider": "anthropic", "cli_path": r"C:\tools\claude.cmd"}}
+        )
+        self.assertEqual(custom_cfg.llm.cli_path, r"C:\tools\claude.cmd")
+
 
 if __name__ == "__main__":
     unittest.main()
