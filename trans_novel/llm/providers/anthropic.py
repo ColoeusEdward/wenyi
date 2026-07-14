@@ -9,8 +9,10 @@ Anthropic 原生格式，因此不复用 OpenAICompatibleBaseClient，只借用�
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
+import tempfile
 import threading
 from typing import Any, Optional
 
@@ -216,39 +218,55 @@ class AnthropicClient(LLMClient):
             ]
             + extra_argv
         )
+
+        system_prompt_file: str | None = None
         if system_prompt:
-            argv += ["--system-prompt", system_prompt]
+            # 用临时文件而非 `--system-prompt <text>` 传递：Windows 上解析到的
+            # claude 可执行文件是 npm 生成的 .cmd 包装脚本，即使 shell=False，
+            # Windows 也会隐式经由 cmd.exe 执行它；cmd.exe 自身的命令行解析会把
+            # 参数里未转义的 < / > 当作重定向符处理（哪怕被"引号"包裹），而
+            # system prompt 里常见的 "<占位符>" 写法就会触发"系统找不到指定的
+            # 文件"。文件传递完全绕开 argv/cmd.exe 解析，从根上避免这个问题。
+            fd, system_prompt_file = tempfile.mkstemp(suffix=".txt")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(system_prompt)
+            argv += ["--system-prompt-file", system_prompt_file]
         argv += ["-p"]
 
-        @retry(
-            stop=stop_after_attempt(self.cfg.max_retries + 1),
-            wait=wait_exponential(multiplier=1, max=30),
-            retry=retry_if_exception_type(Exception),
-            reraise=True,
-        )
-        def _call() -> str:
-            proc = subprocess.run(
-                argv,
-                input=stdin_text,
-                capture_output=True,
-                text=True,
-                timeout=self.cfg.timeout,
-                encoding="utf-8",
-            )
-            if proc.returncode != 0:
-                raise RuntimeError(
-                    f"claude CLI 退出码非 0（{proc.returncode}）：{proc.stderr[:500]}"
-                )
-            try:
-                data = json.loads(proc.stdout)
-            except ValueError as error:
-                raise RuntimeError(
-                    f"claude CLI 输出不是合法 JSON：{proc.stdout[:500]!r}"
-                ) from error
-            if data.get("is_error"):
-                raise RuntimeError(f"claude CLI 返回错误：{data!r}")
-            sample = normalize_anthropic_usage(data.get("usage"))
-            self.usage.record(tier, sample, stage)
-            return data.get("result", "")
+        try:
 
-        return _call()
+            @retry(
+                stop=stop_after_attempt(self.cfg.max_retries + 1),
+                wait=wait_exponential(multiplier=1, max=30),
+                retry=retry_if_exception_type(Exception),
+                reraise=True,
+            )
+            def _call() -> str:
+                proc = subprocess.run(
+                    argv,
+                    input=stdin_text,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.cfg.timeout,
+                    encoding="utf-8",
+                )
+                if proc.returncode != 0:
+                    raise RuntimeError(
+                        f"claude CLI 退出码非 0（{proc.returncode}）：{proc.stderr[:500]}"
+                    )
+                try:
+                    data = json.loads(proc.stdout)
+                except ValueError as error:
+                    raise RuntimeError(
+                        f"claude CLI 输出不是合法 JSON：{proc.stdout[:500]!r}"
+                    ) from error
+                if data.get("is_error"):
+                    raise RuntimeError(f"claude CLI 返回错误：{data!r}")
+                sample = normalize_anthropic_usage(data.get("usage"))
+                self.usage.record(tier, sample, stage)
+                return data.get("result", "")
+
+            return _call()
+        finally:
+            if system_prompt_file is not None:
+                os.remove(system_prompt_file)

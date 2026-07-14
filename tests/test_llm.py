@@ -472,6 +472,9 @@ class TestAnthropicProvider(unittest.TestCase):
             captured["input"] = input
             captured["timeout"] = timeout
             captured["encoding"] = encoding
+            prompt_file = argv[argv.index("--system-prompt-file") + 1]
+            with open(prompt_file, "r", encoding="utf-8") as f:
+                captured["system_prompt_file_content"] = f.read()
 
             class Result:
                 returncode = 0
@@ -500,14 +503,81 @@ class TestAnthropicProvider(unittest.TestCase):
         self.assertIn("--no-session-persistence", captured["argv"])
         self.assertIn("--tools", captured["argv"])
         self.assertIn("none", captured["argv"])
-        self.assertIn("--system-prompt", captured["argv"])
-        self.assertIn("你是翻译。", captured["argv"])
+        self.assertIn("--system-prompt-file", captured["argv"])
+        self.assertNotIn("--system-prompt", captured["argv"])
+        self.assertEqual(captured["system_prompt_file_content"], "你是翻译。")
         self.assertIn("--model", captured["argv"])
         self.assertIn("claude-opus-4-8", captured["argv"])
 
         summary = client.usage_summary()
         self.assertEqual(summary["totals"]["prompt_tokens"], 10)
         self.assertEqual(summary["totals"]["completion_tokens"], 5)
+
+    def test_complete_cleans_up_system_prompt_temp_file(self):
+        import json
+        import os
+        from unittest.mock import patch
+
+        from trans_novel.config import LLMConfig
+        from trans_novel.llm.providers.anthropic import AnthropicClient
+
+        cfg = LLMConfig(tiers={"strong": {"model": "m"}})
+        client = AnthropicClient(cfg)
+
+        captured = {}
+
+        def fake_run(argv, *, input, capture_output, text, timeout, encoding):
+            prompt_file = argv[argv.index("--system-prompt-file") + 1]
+            captured["prompt_file"] = prompt_file
+            self.assertTrue(os.path.exists(prompt_file))
+
+            class Result:
+                returncode = 0
+                stdout = json.dumps({"is_error": False, "result": "ok", "usage": None})
+                stderr = ""
+
+            return Result()
+
+        with patch("shutil.which", return_value="/usr/bin/claude"), patch(
+            "subprocess.run", side_effect=fake_run
+        ):
+            client.complete(
+                [
+                    {"role": "system", "content": "sys with <angle> brackets"},
+                    {"role": "user", "content": "x"},
+                ]
+            )
+
+        self.assertFalse(os.path.exists(captured["prompt_file"]))
+
+    def test_complete_omits_system_prompt_file_flag_when_no_system_message(self):
+        import json
+        from unittest.mock import patch
+
+        from trans_novel.config import LLMConfig
+        from trans_novel.llm.providers.anthropic import AnthropicClient
+
+        cfg = LLMConfig(tiers={"strong": {"model": "m"}})
+        client = AnthropicClient(cfg)
+
+        captured = {}
+
+        def fake_run(argv, *, input, capture_output, text, timeout, encoding):
+            captured["argv"] = argv
+
+            class Result:
+                returncode = 0
+                stdout = json.dumps({"is_error": False, "result": "ok", "usage": None})
+                stderr = ""
+
+            return Result()
+
+        with patch("shutil.which", return_value="/usr/bin/claude"), patch(
+            "subprocess.run", side_effect=fake_run
+        ):
+            client.complete([{"role": "user", "content": "x"}])
+
+        self.assertNotIn("--system-prompt-file", captured["argv"])
 
     def test_complete_retries_on_is_error_then_succeeds(self):
         import json
