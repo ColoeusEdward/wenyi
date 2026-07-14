@@ -87,15 +87,17 @@ llm:
 `openai` 默认读取 `OPENAI_API_KEY`，`openrouter` 默认读取
 `OPENROUTER_API_KEY`。两者均可使用 `base_url`、`api_key_env` 覆盖默认值。
 
-### Anthropic（Claude 原生接口）
+### Anthropic（本机 Claude Code CLI）
 
-`anthropic` provider 直接调用 Anthropic 官方 Messages API（而非 OpenAI 兼容
-接口），可完整使用 adaptive thinking 与 `effort` 档位调节：
+`anthropic` provider 通过本机已登录的 Claude Code CLI（`claude -p ...`
+非交互模式）调用 Claude 模型，而不是 Anthropic SDK/API key。鉴权完全依赖
+本机 `claude` 的登录态（OAuth/订阅），无需配置 API key：
 
 ```yaml
 llm:
   provider: anthropic
-  api_key_env: ANTHROPIC_API_KEY # 默认值，可省略
+  timeout: 600
+  max_retries: 4
   tiers:
     strong:
       model: claude-opus-4-8
@@ -112,10 +114,19 @@ llm:
         thinking: false
 ```
 
-默认读取 `ANTHROPIC_API_KEY`；`base_url` 一般无需配置（留空即用官方地址，
-Claude Platform on AWS 等兼容部署可覆盖）。`thinking: true` 时启用
-`thinking: {type: "adaptive"}` 并附带 `effort`；关闭思考的档位不发送
-`effort`（Haiku 4.5 等非 Opus 模型不支持该参数）。
+`base_url`、`api_key_env`、`tiers.<tier>.options.extra_body` 在此 provider
+下不再生效（配置了会被忽略并打印一条提示）。`thinking: true` 时映射为 CLI
+的 `--effort <reasoning_effort>`；关闭思考的档位不发送 `--effort`（Haiku
+4.5 等非 Opus 模型不支持该参数）。
+
+默认通过 `shutil.which("claude")` 定位可执行文件；如果本机 PATH 上的
+`claude` 命令有问题（比如损坏的全局 shim），可用 `llm.cli_path` 显式指定：
+
+```yaml
+llm:
+  provider: anthropic
+  cli_path: C:\Program Files\nodejs\claude.cmd
+```
 
 ### 其他 OpenAI 兼容端点
 

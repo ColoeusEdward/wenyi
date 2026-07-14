@@ -9,9 +9,10 @@ language:
 llm:
   # deepseek | openai | anthropic | openrouter | openai-compatible | ollama | vllm | fake
   provider: anthropic
-  # base_url: https://api.deepseek.com
-  base_url: https://api-cc.freemodel.dev
-  api_key_env: MY_KEY
+  # anthropic provider 现已改用本机已登录的 Claude Code CLI（claude -p ...），
+  # 不再需要 base_url / api_key_env，下面两行留作历史记录，已不生效：
+  # base_url: https://api-cc.freemodel.dev
+  # api_key_env: MY_KEY
   timeout: 600
   max_retries: 4
   tiers:
