@@ -1,7 +1,9 @@
-"""通过 Anthropic 官方 Messages API 调用 Claude 模型（非 OpenAI 兼容层）。
+"""通过本机已登录的 claude CLI（Claude Code）调用 Claude 模型（非 SDK/API）。
 
-与其它 provider 不同：请求/响应形状、system 处理和用量字段均为 Anthropic 原生格式，
-因此不复用 OpenAICompatibleBaseClient，只借用其中与协议无关的档位解析/合并帮助函数。
+与其它 provider 不同：不走 HTTP API，而是 spawn 本机 `claude -p ...
+--output-format json` 子进程；请求/响应形状、system 处理和用量字段沿用
+Anthropic 原生格式，因此不复用 OpenAICompatibleBaseClient，只借用其中与
+协议无关的档位解析帮助函数。
 """
 
 from __future__ import annotations
@@ -22,14 +24,9 @@ from ...config import LLMConfig
 from ..base import LLMClient, Messages
 from ..tiers import resolve_tier
 from ..usage import UsageSample, read_usage_int
-from ._openai_compatible import ResolvedTier, deep_merge, resolve_provider_tiers
+from ._openai_compatible import ResolvedTier, resolve_provider_tiers
 
 DEFAULT_API_KEY_ENV = "ANTHROPIC_API_KEY"
-
-# 非思考请求的默认输出上限；开启 adaptive thinking 时思考 token 也计入
-# max_tokens，因此另设更高地板，避免思考刚展开就被截断。
-_DEFAULT_MAX_TOKENS = 8192
-_THINKING_MIN_MAX_TOKENS = 16000
 
 _JSON_MODE_INSTRUCTION = "Output must be valid json."
 
@@ -43,8 +40,10 @@ class AnthropicTierOptions(BaseModel):
     # low | medium | high | xhigh | max；xhigh/max 仅 Opus 档支持，
     # Haiku 4.5 不支持 effort（连同 thinking 一起发送会被拒绝），故只在
     # thinking=True 时随请求发出。字段名沿用其它 provider 的 reasoning_effort，
-    # 请求体里再映射为 Anthropic API 的 output_config.effort。
+    # CLI 模式下映射为 `--effort <value>`。
     reasoning_effort: str = "high"
+    # SDK 时代遗留字段：CLI 模式下不再消费（那是 API 请求体覆盖，CLI 无此概念）。
+    # 保留字段以兼容旧配置文件，配置了会被忽略（AnthropicClient 会打一条提示）。
     extra_body: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -90,6 +89,9 @@ def normalize_anthropic_usage(usage: Any) -> UsageSample | None:
     据此把 cache_creation（写入，非命中）与 input_tokens 一并计入 miss，
     cache_read（命中）计入 hit，prompt_tokens 取两者之和以对齐其它 provider
     「prompt_tokens = hit + miss」的语义。
+
+    CLI 模式下这个函数直接消费 `claude -p --output-format json` 响应体里的
+    `usage` 字段——字段名与官方 Messages API 完全一致，无需额外转换。
     """
     if usage is None:
         return None
@@ -109,13 +111,20 @@ def normalize_anthropic_usage(usage: Any) -> UsageSample | None:
     )
 
 
-def build_request_kwargs(
+def build_cli_invocation(
     tier_config: ResolvedTier[AnthropicTierOptions],
     messages: Messages,
     *,
     json_mode: bool = False,
-    max_tokens: Optional[int] = None,
-) -> dict[str, Any]:
+) -> tuple[list[str], str, str]:
+    """把通用 messages 转换成 `claude` CLI 的调用形状。
+
+    返回 (extra_argv, system_prompt_text, stdin_text)：
+    - extra_argv：追加到固定 CLI flags 后的档位专属参数（--model、可选 --effort）
+    - system_prompt_text：喂给 `--system-prompt` 的文本（json_mode 时追加指令）
+    - stdin_text：喂给 `-p` 的 stdin 内容（非 system 消息按顺序拼接；正常场景下
+      调用方只传一条 system + 一条 user，多条消息只是兜底不炸）
+    """
     system_text, chat_messages = _split_system(messages)
     if json_mode:
         system_text = (
@@ -123,21 +132,13 @@ def build_request_kwargs(
             if system_text
             else _JSON_MODE_INSTRUCTION
         )
-    kwargs: dict[str, Any] = {
-        "model": tier_config.model,
-        "messages": chat_messages,
-    }
-    if system_text:
-        kwargs["system"] = system_text
-    effective_max_tokens = max_tokens or _DEFAULT_MAX_TOKENS
+    stdin_text = "\n\n".join(
+        str(message.get("content", "")) for message in chat_messages
+    )
+    extra_argv: list[str] = ["--model", tier_config.model]
     if tier_config.options.thinking:
-        kwargs["thinking"] = {"type": "adaptive"}
-        kwargs["output_config"] = {"effort": tier_config.options.reasoning_effort}
-        effective_max_tokens = max(effective_max_tokens, _THINKING_MIN_MAX_TOKENS)
-    kwargs["max_tokens"] = effective_max_tokens
-    if tier_config.options.extra_body:
-        kwargs = deep_merge(kwargs, tier_config.options.extra_body)
-    return kwargs
+        extra_argv += ["--effort", tier_config.options.reasoning_effort]
+    return extra_argv, system_text, stdin_text
 
 
 class AnthropicClient(LLMClient):

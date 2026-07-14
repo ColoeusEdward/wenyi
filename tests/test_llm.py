@@ -331,109 +331,96 @@ class TestAnthropicProvider(unittest.TestCase):
         {"role": "user", "content": "x"},
     ]
 
-    def test_splits_system_and_defaults_to_adaptive_thinking(self):
+    def test_splits_system_and_defaults_to_effort_flag(self):
         from trans_novel.llm.providers._openai_compatible import ResolvedTier
         from trans_novel.llm.providers.anthropic import (
             AnthropicTierOptions,
-            build_request_kwargs,
+            build_cli_invocation,
         )
 
         tier = ResolvedTier(model="claude-opus-4-8", options=AnthropicTierOptions())
-        kwargs = build_request_kwargs(tier, self.messages)
+        extra_argv, system_prompt, stdin_text = build_cli_invocation(tier, self.messages)
 
-        self.assertEqual(kwargs["system"], "你是翻译。")
-        self.assertEqual(kwargs["messages"], [{"role": "user", "content": "x"}])
-        self.assertEqual(kwargs["thinking"], {"type": "adaptive"})
-        self.assertEqual(kwargs["output_config"], {"effort": "high"})
-        self.assertEqual(kwargs["max_tokens"], 16000)
+        self.assertEqual(system_prompt, "你是翻译。")
+        self.assertEqual(stdin_text, "x")
+        self.assertIn("--model", extra_argv)
+        self.assertEqual(extra_argv[extra_argv.index("--model") + 1], "claude-opus-4-8")
+        self.assertIn("--effort", extra_argv)
+        self.assertEqual(extra_argv[extra_argv.index("--effort") + 1], "high")
 
-    def test_thinking_disabled_skips_effort_and_uses_default_max_tokens(self):
+    def test_thinking_disabled_skips_effort_flag(self):
         from trans_novel.llm.providers._openai_compatible import ResolvedTier
         from trans_novel.llm.providers.anthropic import (
             AnthropicTierOptions,
-            build_request_kwargs,
+            build_cli_invocation,
         )
 
         tier = ResolvedTier(
             model="claude-haiku-4-5",
             options=AnthropicTierOptions(thinking=False),
         )
-        kwargs = build_request_kwargs(tier, self.messages)
+        extra_argv, _, _ = build_cli_invocation(tier, self.messages)
 
-        self.assertNotIn("thinking", kwargs)
-        self.assertNotIn("output_config", kwargs)
-        self.assertEqual(kwargs["max_tokens"], 8192)
+        self.assertNotIn("--effort", extra_argv)
 
-    def test_explicit_max_tokens_respected_and_floored_when_thinking(self):
+    def test_custom_reasoning_effort_is_passed_through(self):
         from trans_novel.llm.providers._openai_compatible import ResolvedTier
         from trans_novel.llm.providers.anthropic import (
             AnthropicTierOptions,
-            build_request_kwargs,
+            build_cli_invocation,
         )
 
-        thinking_tier = ResolvedTier(
-            model="claude-opus-4-8", options=AnthropicTierOptions()
+        tier = ResolvedTier(
+            model="claude-opus-4-8",
+            options=AnthropicTierOptions(reasoning_effort="xhigh"),
         )
-        self.assertEqual(
-            build_request_kwargs(thinking_tier, self.messages, max_tokens=100)[
-                "max_tokens"
-            ],
-            16000,
-        )
-        no_thinking_tier = ResolvedTier(
-            model="claude-haiku-4-5",
-            options=AnthropicTierOptions(thinking=False),
-        )
-        self.assertEqual(
-            build_request_kwargs(no_thinking_tier, self.messages, max_tokens=100)[
-                "max_tokens"
-            ],
-            100,
-        )
+        extra_argv, _, _ = build_cli_invocation(tier, self.messages)
+
+        self.assertEqual(extra_argv[extra_argv.index("--effort") + 1], "xhigh")
 
     def test_json_mode_appends_instruction_without_mutating_input(self):
         from trans_novel.llm.providers._openai_compatible import ResolvedTier
         from trans_novel.llm.providers.anthropic import (
             AnthropicTierOptions,
-            build_request_kwargs,
+            build_cli_invocation,
         )
 
         tier = ResolvedTier(model="m", options=AnthropicTierOptions(thinking=False))
-        kwargs = build_request_kwargs(tier, self.messages, json_mode=True)
+        _, system_prompt, _ = build_cli_invocation(tier, self.messages, json_mode=True)
 
-        self.assertIn("json", kwargs["system"])
+        self.assertIn("json", system_prompt)
         self.assertEqual(self.messages[0]["content"], "你是翻译。")
 
     def test_json_mode_without_system_message_still_injects_instruction(self):
         from trans_novel.llm.providers._openai_compatible import ResolvedTier
         from trans_novel.llm.providers.anthropic import (
             AnthropicTierOptions,
-            build_request_kwargs,
+            build_cli_invocation,
         )
 
         tier = ResolvedTier(model="m", options=AnthropicTierOptions(thinking=False))
-        kwargs = build_request_kwargs(
+        _, system_prompt, _ = build_cli_invocation(
             tier, [{"role": "user", "content": "x"}], json_mode=True
         )
 
-        self.assertIn("json", kwargs["system"])
+        self.assertIn("json", system_prompt)
 
-    def test_extra_body_merges_over_generated_kwargs(self):
+    def test_multiple_non_system_messages_join_into_stdin_text(self):
         from trans_novel.llm.providers._openai_compatible import ResolvedTier
         from trans_novel.llm.providers.anthropic import (
             AnthropicTierOptions,
-            build_request_kwargs,
+            build_cli_invocation,
         )
 
-        tier = ResolvedTier(
-            model="m",
-            options=AnthropicTierOptions(
-                thinking=False, extra_body={"max_tokens": 555}
-            ),
-        )
-        kwargs = build_request_kwargs(tier, self.messages)
+        tier = ResolvedTier(model="m", options=AnthropicTierOptions(thinking=False))
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": "second"},
+        ]
+        _, _, stdin_text = build_cli_invocation(tier, messages)
 
-        self.assertEqual(kwargs["max_tokens"], 555)
+        self.assertEqual(stdin_text, "first\n\nsecond")
 
     def test_usage_normalization_treats_cache_write_as_miss(self):
         from trans_novel.llm.providers.anthropic import normalize_anthropic_usage
