@@ -19,7 +19,7 @@ language:
 
 # ── LLM ──────────────────────────────────────────────────────────────────
 llm:
-  # deepseek | openai | anthropic | openrouter | openai-compatible | ollama | vllm | fake
+  # deepseek | openai | anthropic | codex | openrouter | openai-compatible | ollama | vllm | fake
   provider: deepseek
   base_url: https://api.deepseek.com
   api_key_env: DEEPSEEK_API_KEY
@@ -104,7 +104,7 @@ class LLMConfig(BaseModel):
     timeout: int = 600
     max_retries: int = 4
     tiers: dict[str, TierConfig] = Field(default_factory=dict)
-    cli_path: str | None = None  # anthropic provider: 显式指定 claude CLI 可执行文件路径
+    cli_path: str | None = None  # anthropic/codex provider: 显式指定本机 CLI 路径
 
 
 class SegmentConfig(BaseModel):

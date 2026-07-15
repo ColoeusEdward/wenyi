@@ -663,6 +663,100 @@ class TestAnthropicProvider(unittest.TestCase):
         self.assertNotIn("/usr/bin/claude", captured["argv"])
 
 
+class TestCodexProvider(unittest.TestCase):
+    def test_prompt_preserves_roles_and_json_instruction(self):
+        from trans_novel.llm.providers.codex import build_codex_prompt
+
+        prompt = build_codex_prompt(
+            [
+                {"role": "system", "content": "你是译者。"},
+                {"role": "user", "content": "翻译这句话。"},
+            ],
+            json_mode=True,
+        )
+
+        self.assertIn("[SYSTEM]", prompt)
+        self.assertIn("[USER]", prompt)
+        self.assertIn("valid JSON", prompt)
+
+    def test_parse_jsonl_result_and_usage(self):
+        import json
+
+        from trans_novel.llm.providers.codex import parse_codex_events
+
+        output = "\n".join(
+            [
+                json.dumps({"type": "thread.started", "thread_id": "t"}),
+                json.dumps(
+                    {
+                        "type": "item.completed",
+                        "item": {"type": "agent_message", "text": "你好"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "turn.completed",
+                        "usage": {
+                            "input_tokens": 10,
+                            "cached_input_tokens": 4,
+                            "output_tokens": 3,
+                        },
+                    }
+                ),
+            ]
+        )
+
+        text, usage = parse_codex_events(output)
+
+        self.assertEqual(text, "你好")
+        self.assertEqual(usage.prompt_tokens, 10)
+        self.assertEqual(usage.cache_hit_tokens, 4)
+        self.assertEqual(usage.cache_miss_tokens, 6)
+        self.assertEqual(usage.total_tokens, 13)
+
+    def test_complete_invokes_codex_exec(self):
+        import json
+        from unittest.mock import patch
+
+        from trans_novel.config import LLMConfig
+        from trans_novel.llm.providers.codex import CodexClient
+
+        client = CodexClient(LLMConfig(tiers={"strong": {"model": "m"}}))
+        captured = {}
+
+        def fake_run(argv, *, input, capture_output, text, timeout, encoding):
+            captured["argv"] = argv
+            captured["input"] = input
+
+            class Result:
+                returncode = 0
+                stdout = "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "type": "item.completed",
+                                "item": {"type": "agent_message", "text": "ok"},
+                            }
+                        ),
+                        json.dumps({"type": "turn.completed", "usage": None}),
+                    ]
+                )
+                stderr = ""
+
+            return Result()
+
+        with patch("shutil.which", return_value="/usr/bin/codex"), patch(
+            "subprocess.run", side_effect=fake_run
+        ):
+            result = client.complete([{"role": "user", "content": "x"}])
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(captured["argv"][:2], ["/usr/bin/codex", "exec"])
+        self.assertIn("--json", captured["argv"])
+        self.assertIn("--sandbox", captured["argv"])
+        self.assertEqual(captured["input"], "[USER]\nx")
+
+
 class TestProviderFactory(unittest.TestCase):
     def _config(
         self,
@@ -686,6 +780,7 @@ class TestProviderFactory(unittest.TestCase):
     def test_builds_each_provider_from_its_own_module(self):
         from trans_novel.llm.factory import build_client
         from trans_novel.llm.providers.anthropic import AnthropicClient
+        from trans_novel.llm.providers.codex import CodexClient
         from trans_novel.llm.providers.ollama import OllamaClient
         from trans_novel.llm.providers.openai import OpenAIClient
         from trans_novel.llm.providers.openai_compatible import (
@@ -697,6 +792,7 @@ class TestProviderFactory(unittest.TestCase):
         cases = (
             ("openai", OpenAIClient, None),
             ("anthropic", AnthropicClient, None),
+            ("codex", CodexClient, None),
             ("openrouter", OpenRouterClient, None),
             ("openai-compatible", OpenAICompatibleClient, "https://example.test/v1"),
             ("ollama", OllamaClient, None),

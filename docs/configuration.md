@@ -128,6 +128,33 @@ llm:
   cli_path: C:\Program Files\nodejs\claude.cmd
 ```
 
+### Codex（本机 Codex CLI）
+
+`codex` provider 通过本机已登录的 Codex CLI（`codex exec --json` 非交互模式）
+调用模型，不需要 API key。`thinking` 和 `extra_body` 不适用；每个档位的
+`reasoning_effort` 会作为 Codex CLI 的 `model_reasoning_effort` 配置传入：
+
+```yaml
+llm:
+  provider: codex
+  cli_path: C:\Program Files\nodejs\codex.cmd # 可省略，默认从 PATH 查找 codex
+  timeout: 600
+  max_retries: 4
+  tiers:
+    strong:
+      model: gpt-5.6-terra
+      options:
+        reasoning_effort: high
+    cheap:
+      model: gpt-5.6-terra
+      options:
+        reasoning_effort: medium
+    fast:
+      model: gpt-5.6-terra
+      options:
+        reasoning_effort: low
+```
+
 ### 其他 OpenAI 兼容端点
 
 任意兼容 Chat Completions 的端点可使用 `openai-compatible`：

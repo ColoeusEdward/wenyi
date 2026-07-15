@@ -20,6 +20,10 @@ def build_client(config: Config) -> LLMClient:
         from .providers.anthropic import AnthropicClient
 
         return AnthropicClient(config.llm)
+    if provider == "codex":
+        from .providers.codex import CodexClient
+
+        return CodexClient(config.llm)
     if provider == "openrouter":
         from .providers.openrouter import OpenRouterClient
 
@@ -42,6 +46,6 @@ def build_client(config: Config) -> LLMClient:
         return FakeClient()
     raise ValueError(
         f"未知 provider：{provider}"
-        "（支持 deepseek / openai / anthropic / openrouter / openai-compatible / "
+        "（支持 deepseek / openai / anthropic / codex / openrouter / openai-compatible / "
         "ollama / vllm / fake）"
     )
