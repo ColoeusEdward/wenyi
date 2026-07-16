@@ -754,6 +754,7 @@ class TestCodexProvider(unittest.TestCase):
         self.assertEqual(captured["argv"][:2], ["/usr/bin/codex", "exec"])
         self.assertIn("--json", captured["argv"])
         self.assertIn("--sandbox", captured["argv"])
+        self.assertIn("mcp_servers={}", captured["argv"])
         self.assertEqual(captured["input"], "[USER]\nx")
 
 

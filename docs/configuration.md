@@ -132,7 +132,9 @@ llm:
 
 `codex` provider 通过本机已登录的 Codex CLI（`codex exec --json` 非交互模式）
 调用模型，不需要 API key。`thinking` 和 `extra_body` 不适用；每个档位的
-`reasoning_effort` 会作为 Codex CLI 的 `model_reasoning_effort` 配置传入：
+`reasoning_effort` 会作为 Codex CLI 的 `model_reasoning_effort` 配置传入。为避免翻译请求
+启动用户全局配置的 MCP 服务，调用时还会传入 `--config mcp_servers={}`；它仅对该次
+`codex exec` 生效：
 
 ```yaml
 llm:

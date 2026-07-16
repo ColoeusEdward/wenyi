@@ -121,6 +121,7 @@ class CodexClient(LLMClient):
         tier_config = resolve_tier(self.tiers, tier)
         argv = [
             self._ensure_cli_path(), "exec", "--ephemeral", "--skip-git-repo-check",
+            "--config", "mcp_servers={}",
             "--sandbox", "read-only", "--color", "never", "--json", "--model",
             tier_config.model, "--config",
             f'model_reasoning_effort="{tier_config.options.reasoning_effort}"', "-",
