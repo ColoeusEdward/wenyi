@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import threading
+from pathlib import Path
 from typing import Any, Optional
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10: tomllib landed in 3.11
+    tomllib = None
 
 from pydantic import BaseModel, ConfigDict
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
@@ -96,6 +103,37 @@ class CodexClient(LLMClient):
         )
         self._cli_path: str | None = None
         self._cli_path_lock = threading.Lock()
+        self._mcp_disable_cache: list[str] | None = None
+
+    def _mcp_disable_args(self) -> list[str]:
+        """Build per-server `-c mcp_servers.<name>.enabled=false` overrides.
+
+        `-c mcp_servers={}` merges non-destructively and silently no-ops
+        (openai/codex#16045), so each server configured in the user's
+        ~/.codex/config.toml must be disabled by name. Translation calls never
+        need MCP servers, and skipping them avoids respawning e.g. the
+        playwright npx process on every ephemeral exec.
+        """
+        with self._cli_path_lock:
+            if self._mcp_disable_cache is None:
+                names: list[str] = []
+                config_path = (
+                    Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")) / "config.toml"
+                )
+                if tomllib is not None:
+                    try:
+                        with open(config_path, "rb") as fh:
+                            servers = tomllib.load(fh).get("mcp_servers")
+                        if isinstance(servers, dict):
+                            names = list(servers)
+                    except (OSError, tomllib.TOMLDecodeError):
+                        pass  # 读不到配置就不加覆盖，保持原行为
+                self._mcp_disable_cache = [
+                    arg
+                    for name in names
+                    for arg in ("--config", f"mcp_servers.{name}.enabled=false")
+                ]
+        return self._mcp_disable_cache
 
     def _ensure_cli_path(self) -> str:
         with self._cli_path_lock:
@@ -121,7 +159,10 @@ class CodexClient(LLMClient):
         tier_config = resolve_tier(self.tiers, tier)
         argv = [
             self._ensure_cli_path(), "exec", "--ephemeral", "--skip-git-repo-check",
+            # mcp_servers={} 会被非破坏性合并而静默失效（openai/codex#16045），
+            # 必须按名逐个 enabled=false 才能真正阻止 MCP server 启动。
             "--config", "mcp_servers={}",
+            *self._mcp_disable_args(),
             "--sandbox", "read-only", "--color", "never", "--json", "--model",
             tier_config.model, "--config",
             f'model_reasoning_effort="{tier_config.options.reasoning_effort}"', "-",
